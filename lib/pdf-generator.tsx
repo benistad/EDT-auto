@@ -1,6 +1,27 @@
-import type { SchoolConfig } from "@/app/page"
-import type { TimeSlot } from "@/components/timetable-screen"
+import type { SchoolConfig, TimeSlot } from "@/lib/types"
 import { minutesToHM } from "@/lib/utils"
+
+// Convertit un hex (#rrggbb ou #rgb) en rgba avec alpha
+function hexToRGBA(hex: string, alpha = 0.15): string {
+  try {
+    let h = hex.trim()
+    if (h.startsWith("#")) h = h.slice(1)
+    if (h.length === 3) {
+      const r = parseInt(h[0] + h[0], 16)
+      const g = parseInt(h[1] + h[1], 16)
+      const b = parseInt(h[2] + h[2], 16)
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`
+    }
+    if (h.length === 6) {
+      const r = parseInt(h.slice(0, 2), 16)
+      const g = parseInt(h.slice(2, 4), 16)
+      const b = parseInt(h.slice(4, 6), 16)
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`
+    }
+  } catch {}
+  // Fallback: bleu clair si non-hex
+  return "rgba(56, 189, 248, 0.15)" // sky-400 à ~15%
+}
 
 export function generatePDF(config: SchoolConfig, timeSlots: TimeSlot[]) {
   // Create a new window for the PDF content
@@ -87,6 +108,7 @@ export function generatePDF(config: SchoolConfig, timeSlots: TimeSlot[]) {
           border-left: 4px solid #6366f1;
         }
         .time-slot.has-subject {
+          /* La couleur réelle est appliquée inline via style="background-color: ..." */
           background-color: #f0f9ff;
         }
         .time-info {
@@ -182,11 +204,13 @@ function generateTableRows(
             }
 
             if (slot.subject) {
+              const base = slot.subject.color || "#6366f1"; // indigo-500 fallback
+              const bg = hexToRGBA(base, 0.15);
               return `
               <td>
-                <div class="time-slot has-subject" style="border-left-color: ${slot.subject.color};">
+                <div class="time-slot has-subject" style="border-left-color: ${base}; background-color: ${bg};">
                   <div class="time-info">${formatDuration(slot.duration)}</div>
-                  <div class="subject-name" style="color: ${slot.subject.color};">
+                  <div class="subject-name" style="color: ${base};">
                     ${slot.subject.name}
                   </div>
                   ${slot.subtitle ? `<div class="subject-subtitle">${slot.subtitle}</div>` : ""}

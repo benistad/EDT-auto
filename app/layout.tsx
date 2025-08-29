@@ -7,6 +7,11 @@ export const metadata: Metadata = {
   title: 'v0 App',
   description: 'Created with v0',
   generator: 'v0.app',
+  icons: {
+    icon: '/placeholder-logo.png',
+    shortcut: '/placeholder-logo.png',
+    apple: '/placeholder-logo.png',
+  },
 }
 
 export default function RootLayout({

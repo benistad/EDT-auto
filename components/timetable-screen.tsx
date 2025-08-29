@@ -1,40 +1,26 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ArrowLeft, Download, Wand2 } from "lucide-react"
-import type { SchoolConfig } from "@/app/page"
+import type { SchoolConfig, Subject, TimeSlot } from "@/lib/types"
 import { SubjectPanel } from "@/components/subject-panel"
 import { TimetableGrid } from "@/components/timetable-grid"
-import { generatePDF } from "@/lib/pdf-generator"
+import { jsPDF } from "jspdf"
+import { rasterizeWithFallback } from "@/lib/pdf-utils"
+
+// Export helpers centralized in '@/lib/pdf-utils'
 
 interface TimetableScreenProps {
   config: SchoolConfig
   onBackToConfig: () => void
 }
 
-export interface Subject {
-  id: string
-  name: string
-  color: string
-  totalHours: number
-  remainingHours: number
-}
-
-export interface TimeSlot {
-  id: string
-  day: string
-  startTime: string
-  endTime: string
-  subject?: Subject
-  subtitle?: string
-  duration: number
-}
-
 export function TimetableScreen({ config, onBackToConfig }: TimetableScreenProps) {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([])
+  const exportRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     // Initialize subjects based on cycle
@@ -173,8 +159,22 @@ export function TimetableScreen({ config, onBackToConfig }: TimetableScreenProps
     setSubjects([...availableSubjects])
   }
 
-  const handleExportPDF = () => {
-    generatePDF(config, timeSlots)
+  const handleExportPDF = async () => {
+    try {
+      const node = exportRef.current
+      if (!node) return
+      const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" })
+      const canvas = await rasterizeWithFallback(node)
+      const pw = pdf.internal.pageSize.getWidth()
+      const ph = pdf.internal.pageSize.getHeight()
+      const r = Math.min(pw / canvas.width, ph / canvas.height)
+      const w = canvas.width * r, h = canvas.height * r
+      pdf.addImage(canvas.toDataURL("image/png"), "PNG", (pw - w) / 2, (ph - h) / 2, w, h)
+      pdf.save(`EDT_${config.classLevel}.pdf`)
+    } catch (e) {
+      console.error(e)
+      alert("Erreur lors de l'export PDF")
+    }
   }
 
   return (
@@ -209,7 +209,7 @@ export function TimetableScreen({ config, onBackToConfig }: TimetableScreenProps
           <div className="lg:col-span-1">
             <SubjectPanel subjects={subjects} onSubjectsChange={setSubjects} />
           </div>
-          <div className="lg:col-span-3">
+          <div className="lg:col-span-3" ref={exportRef}>
             <TimetableGrid
               config={config}
               timeSlots={timeSlots}

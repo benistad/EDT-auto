@@ -9,8 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Edit2, Trash2, Clock } from "lucide-react"
-import type { SchoolConfig } from "@/app/page"
-import type { Subject, TimeSlot } from "@/components/timetable-screen"
+import type { SchoolConfig, Subject, TimeSlot } from "@/lib/types"
 import { minutesToHM } from "@/lib/utils"
 
 interface TimetableGridProps {

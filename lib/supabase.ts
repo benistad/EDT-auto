@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import type { ClassLevel, DayConfig, Block, SubjectDef } from './types'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -13,10 +14,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 export interface TimetableSave {
   id?: string
   name: string
-  class_name: string
-  days_config: any
-  blocks: any[]
-  subjects: any[]
+  class_name: ClassLevel
+  days_config: DayConfig[]
+  blocks: Block[]
+  subjects: SubjectDef[]
   created_at?: string
   updated_at?: string
 }

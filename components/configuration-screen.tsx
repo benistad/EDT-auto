@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import type { ClassLevel, Cycle, SchoolConfig } from "@/app/page"
+import type { ClassLevel, Cycle, SchoolConfig } from "@/lib/types"
 
 interface ConfigurationScreenProps {
   onComplete: (config: SchoolConfig) => void
@@ -84,7 +84,7 @@ export function ConfigurationScreen({ onComplete }: ConfigurationScreenProps) {
             <div className="space-y-4">
               <div>
                 <Label htmlFor="class-level">Classe</Label>
-                <Select value={classLevel} onValueChange={(value: ClassLevel) => setClassLevel(value)}>
+                <Select value={classLevel} onValueChange={(v) => setClassLevel(v as ClassLevel)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choisir une classe" />
                   </SelectTrigger>

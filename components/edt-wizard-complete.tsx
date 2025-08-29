@@ -3,8 +3,8 @@
 import { useMemo, useState, useEffect, useRef } from "react"
 import type { DragEvent, ReactElement } from "react"
 import { Rnd } from "react-rnd"
-import html2canvas from "html2canvas"
 import { jsPDF } from "jspdf"
+import { sanitizeOklchInClone, rasterizeWithFallback } from "@/lib/pdf-utils"
 import { minutesToHM } from "@/lib/utils"
 
 // Emploi du temps – Assistant CP→CM2 (Wizard + Drag & Drop + Export PDF)
@@ -25,57 +25,7 @@ type Block = { id: string; day: DayKey; subject: SubjectKey; start: string; end:
 type NewBlock = Omit<Block, 'id'>
 type TimePart = 'AM' | 'PM'
 
-// === Helpers d'export : neutraliser les couleurs CSS non supportées (ex: oklch) et rasteriser en canvas ===
-function sanitizeOklchInClone(root: HTMLElement) {
-  try {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
-    while (walker.nextNode()) {
-      const el = walker.currentNode as HTMLElement
-      try {
-        const inline = (el as HTMLElement).getAttribute && (el as HTMLElement).getAttribute("style")
-        if (inline && inline.includes("oklch")) el.setAttribute("style", inline.replace(/oklch\([^)]*\)/g, ""))
-        const cs: CSSStyleDeclaration | null = window.getComputedStyle ? window.getComputedStyle(el) : null
-        const has = (v: string | null | undefined) => typeof v === "string" && v.includes("oklch")
-        if (
-          cs &&
-          (has(cs.color) ||
-            has(cs.backgroundImage) ||
-            has(cs.backgroundColor) ||
-            has(cs.boxShadow) ||
-            has(cs.borderColor))
-        ) {
-          el.style.backgroundImage = "none"
-          el.style.filter = "none"
-          if (has(cs.backgroundColor)) el.style.backgroundColor = "#ffffff"
-          if (has(cs.color)) el.style.color = "#111111"
-          el.style.boxShadow = "none"
-          el.style.borderColor = "#cccccc"
-        }
-      } catch (_) {}
-    }
-  } catch (_) {}
-}
-async function rasterizeNode(node: HTMLElement) {
-  const clone = node.cloneNode(true) as HTMLElement;
-  const wrapper = document.createElement('div');
-  wrapper.style.position = 'fixed';
-  wrapper.style.left = '-10000px';
-  wrapper.style.top = '-10000px';
-  wrapper.style.background = '#ffffff';
-  wrapper.style.padding = '0';
-  wrapper.style.margin = '0';
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
-  try {
-    sanitizeOklchInClone(clone);
-    const canvas = await html2canvas(clone, { scale: 2, backgroundColor: '#ffffff' });
-    return canvas;
-  } finally {
-    if (wrapper && wrapper.parentNode) {
-      wrapper.parentNode.removeChild(wrapper);
-    }
-  }
-}
+// Helpers d'export centralisés: importés depuis '@/lib/pdf-utils'
 
 // ===== Utilitaires temps (HH:MM) + mini tests =====
 function toMin(hhmm: string): number {
@@ -806,7 +756,7 @@ export default function EDTWizard() {
         if (!node1) throw new Error("Aperçu de l'emploi du temps introuvable");
 
         const pdf = new jsPDF({ orientation:'landscape', unit:'pt', format:'a4' });
-        const canvas1 = await rasterizeNode(node1);
+        const canvas1 = await rasterizeWithFallback(node1);
         const pw = pdf.internal.pageSize.getWidth();
         const ph = pdf.internal.pageSize.getHeight();
         const r1 = Math.min(pw / canvas1.width, ph / canvas1.height);
@@ -814,7 +764,7 @@ export default function EDTWizard() {
         pdf.addImage(canvas1.toDataURL('image/png'), 'PNG', (pw - w1)/2, (ph - h1)/2, w1, h1);
 
         if (node2){
-          const canvas2 = await rasterizeNode(node2);
+          const canvas2 = await rasterizeWithFallback(node2);
           pdf.addPage();
           const r2 = Math.min(pw / canvas2.width, ph / canvas2.height);
           const w2 = canvas2.width * r2, h2 = canvas2.height * r2;

@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import type { Subject } from "@/components/timetable-screen"
+import type { Subject } from "@/lib/types"
 import { minutesToHM } from "@/lib/utils"
 
 interface SubjectPanelProps {

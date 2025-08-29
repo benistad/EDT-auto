@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useRef, useMemo, useEffect } from "react"
-import html2canvas from "html2canvas"
 import jsPDF from "jspdf"
 import { Rnd } from "react-rnd"
 import { saveTimetable, loadTimetables, deleteTimetable, TimetableSave } from "../lib/supabase"
@@ -9,6 +8,54 @@ import { generateObject } from "ai"
 import { createOpenAI } from "@ai-sdk/openai"
 import { z } from "zod"
 import { minutesToHM } from "@/lib/utils"
+import type { DayKey, DayConfig, Block, SubjectDef, ClassLevel } from "@/lib/types"
+import { rasterizeWithFallback } from "@/lib/pdf-utils"
+
+// Type definitions
+type CycleKey = "C2" | "C3";
+type TemplateKey = "classic" | "pastel" | "mono";
+type NewBlock = { day: DayKey; start: string; end: string; subject: string; subtitle?: string };
+
+// Type guards
+function isKlass(v: unknown): v is ClassLevel {
+  return v === "CP" || v === "CE1" || v === "CE2" || v === "CM1" || v === "CM2"
+}
+
+// Zod schemas for runtime validation of loaded data
+const zTime = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, { message: 'HH:MM expected' })
+const zDayKey = z.enum(["Mon", "Tue", "Wed", "Thu", "Fri"]) 
+const zDayConfig = z.object({
+  key: zDayKey,
+  label: z.string(),
+  enabled: z.boolean(),
+  morningStart: zTime,
+  lunchStart: zTime,
+  lunchEnd: zTime,
+  dayEnd: zTime,
+  rec1Start: zTime,
+  rec1Dur: z.number().int().min(0),
+  rec2Start: zTime,
+  rec2Dur: z.number().int().min(0),
+})
+const zSubjectDef = z.object({ key: z.string(), label: z.string(), minutes: z.number().int().min(0) })
+const zBlock = z.object({
+  id: z.string(),
+  day: zDayKey,
+  subject: z.string(),
+  start: zTime,
+  end: zTime,
+  subtitle: z.string().optional(),
+})
+const zTimetableSave = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  class_name: z.enum(["CP","CE1","CE2","CM1","CM2"]),
+  days_config: z.array(zDayConfig),
+  blocks: z.array(zBlock),
+  subjects: z.array(zSubjectDef),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+})
 
 // S'assurer que la variable d'environnement est disponible globalement
 if (typeof window !== "undefined") {
@@ -31,161 +78,7 @@ console.log("[v0] OpenAI key present:", HAS_OPENAI_KEY)
 // Emploi du temps – Assistant CP→CM2 (Wizard + Drag & Drop + Export PDF)
 // Single-file React component with Tailwind CSS
 
-// === Helpers d'export : neutraliser les couleurs CSS non supportées (ex: oklch) et rasteriser en canvas ===
-function sanitizeOklchInClone(root: HTMLElement) {
-  try {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
-    while (walker.nextNode()) {
-      const el = walker.currentNode as HTMLElement
-      try {
-        // Nettoyer les styles inline
-        const inline = el.getAttribute("style")
-        if (inline && inline.includes("oklch")) {
-          const cleaned = inline.replace(/oklch\([^)]*\)/g, "transparent")
-          el.setAttribute("style", cleaned)
-        }
-        
-        // Forcer le remplacement des styles calculés contenant oklch
-        const cs = window.getComputedStyle ? window.getComputedStyle(el) : null
-        if (cs) {
-          const hasOklch = (prop: string) => {
-            try {
-              const value = cs.getPropertyValue(prop)
-              return value && value.includes("oklch")
-            } catch {
-              return false
-            }
-          }
-          
-          // Forcer des valeurs sûres pour toutes les propriétés CSS potentiellement problématiques
-          if (hasOklch("background-color") || hasOklch("background") || hasOklch("background-image")) {
-            el.style.backgroundColor = "#ffffff"
-            el.style.backgroundImage = "none"
-            el.style.background = "#ffffff"
-          }
-          if (hasOklch("color")) {
-            el.style.color = "#111111"
-          }
-          if (hasOklch("border-color") || hasOklch("border")) {
-            el.style.borderColor = "#cccccc"
-          }
-          if (hasOklch("box-shadow")) {
-            el.style.boxShadow = "none"
-          }
-          if (hasOklch("outline-color") || hasOklch("outline")) {
-            el.style.outlineColor = "transparent"
-            el.style.outline = "none"
-          }
-          if (hasOklch("text-decoration-color")) {
-            el.style.textDecorationColor = "transparent"
-          }
-        }
-      } catch (e) {
-        console.warn("[v0] Error sanitizing element:", e)
-      }
-    }
-  } catch (e) {
-    console.warn("[v0] Error in sanitizeOklchInClone:", e)
-  }
-}
-
-async function rasterizeNode(node: HTMLElement) {
-  try {
-    console.log("[v0] Starting aggressive OKLCH cleanup and rasterization")
-    
-    // Créer une feuille de style temporaire pour forcer l'override de toutes les couleurs OKLCH
-    const tempStyle = document.createElement('style')
-    tempStyle.textContent = `
-      * {
-        background-color: #ffffff !important;
-        color: #111111 !important;
-        border-color: #cccccc !important;
-        outline-color: transparent !important;
-        text-decoration-color: transparent !important;
-        box-shadow: none !important;
-      }
-      .bg-indigo-100 { background-color: #e0e7ff !important; }
-      .bg-rose-100 { background-color: #ffe4e6 !important; }
-      .bg-amber-100 { background-color: #fef3c7 !important; }
-      .bg-emerald-100 { background-color: #d1fae5 !important; }
-      .bg-pink-100 { background-color: #fce7f3 !important; }
-      .bg-sky-100 { background-color: #e0f2fe !important; }
-      .bg-teal-100 { background-color: #ccfbf1 !important; }
-      .bg-cyan-100 { background-color: #cffafe !important; }
-      .border-indigo-300 { border-color: #a5b4fc !important; }
-      .border-rose-300 { border-color: #fda4af !important; }
-      .border-amber-300 { border-color: #fcd34d !important; }
-      .border-emerald-300 { border-color: #6ee7b7 !important; }
-      .border-pink-300 { border-color: #f9a8d4 !important; }
-      .border-sky-300 { border-color: #7dd3fc !important; }
-      .border-teal-300 { border-color: #5eead4 !important; }
-      .border-cyan-300 { border-color: #67e8f9 !important; }
-      .bg-primary { background-color: #3b82f6 !important; }
-      .text-primary-foreground { color: #ffffff !important; }
-      .border-primary\/20 { border-color: rgba(59, 130, 246, 0.2) !important; }
-      .bg-gradient-to-r { background: #e0f2fe !important; }
-      .from-cyan-100 { background: #e0f2fe !important; }
-      .to-amber-100 { background: #e0f2fe !important; }
-      .from-cyan-50 { background: #ecfeff !important; }
-      .to-amber-50 { background: #fffbeb !important; }
-    `
-    
-    // Ajouter la feuille de style temporaire
-    document.head.appendChild(tempStyle)
-    
-    // Attendre que les styles se propagent
-    await new Promise(resolve => setTimeout(resolve, 100))
-    
-    console.log("[v0] Temporary override styles applied")
-    
-    // Rasteriser avec des options restrictives
-    const canvas = await html2canvas(node, {
-      scale: 1.5, // Réduire l'échelle pour éviter les problèmes
-      backgroundColor: "#ffffff",
-      useCORS: true,
-      allowTaint: true,
-      logging: false,
-      removeContainer: true,
-      ignoreElements: (element) => {
-        // Ignorer complètement les éléments problématiques
-        const tagName = element.tagName.toLowerCase()
-        return tagName === 'script' || tagName === 'style' || tagName === 'noscript'
-      },
-      onclone: (clonedDoc) => {
-        // Nettoyer le document cloné de manière agressive
-        const allElements = clonedDoc.querySelectorAll('*')
-        allElements.forEach((el: Element) => {
-          const htmlEl = el as HTMLElement
-          if (htmlEl.style) {
-            // Forcer des styles basiques sur tous les éléments
-            htmlEl.style.backgroundColor = htmlEl.style.backgroundColor || '#ffffff'
-            htmlEl.style.color = htmlEl.style.color || '#111111'
-            htmlEl.style.borderColor = htmlEl.style.borderColor || '#cccccc'
-          }
-        })
-      }
-    })
-    
-    console.log("[v0] Canvas generated:", canvas.width, "x", canvas.height)
-    
-    // Supprimer la feuille de style temporaire
-    document.head.removeChild(tempStyle)
-    console.log("[v0] Temporary styles removed")
-    
-    return canvas
-    
-  } catch (err) {
-    console.error("[v0] Erreur rasterization:", err)
-    // Nettoyer en cas d'erreur
-    const tempStyles = document.querySelectorAll('style')
-    tempStyles.forEach(style => {
-      if (style.textContent?.includes('background-color: #ffffff !important')) {
-        style.remove()
-      }
-    })
-    throw err
-  }
-}
+// PDF export helpers centralized in '@/lib/pdf-utils'
 
 // ===== Utilitaires temps (HH:MM) + mini tests =====
 function toMin(hhmm: string) {
@@ -223,7 +116,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 // ===== Volumes hebdo SANS récré (d'après doc C2/C3) =====
-const SUBJECTS = {
+const SUBJECTS: Record<CycleKey, SubjectDef[]> = {
   C2: [
     { key: "fr", label: "Français", minutes: 9 * 60 + 10 },
     { key: "maths", label: "Mathématiques", minutes: 4 * 60 + 35 },
@@ -243,9 +136,9 @@ const SUBJECTS = {
   ],
 }
 
-const CLASS_TO_CYCLE = { CP: "C2", CE1: "C2", CE2: "C2", CM1: "C3", CM2: "C3" }
+const CLASS_TO_CYCLE: Record<ClassLevel, CycleKey> = { CP: "C2", CE1: "C2", CE2: "C2", CM1: "C3", CM2: "C3" }
 
-const DEFAULT_DAYS = [
+const DEFAULT_DAYS: DayConfig[] = [
   {
     key: "Mon",
     label: "Lundi",
@@ -339,7 +232,7 @@ const TEMPLATES = [
     card: "border-border",
     gridBg: "bg-white",
   },
-]
+] as const
 
 // ======= Auto-répartition =======
 const CHUNK = { fr: 60, maths: 60, lv: 45, eps: 60, arts: 60, qlm_emc: 60, sciences: 60, hg_emc: 60 }
@@ -362,7 +255,7 @@ const PATTERN = {
   },
 }
 
-const SUBJECT_COLORS = {
+const SUBJECT_COLORS: Record<string, string> = {
   fr: "bg-indigo-100 border-indigo-300",
   maths: "bg-rose-100 border-rose-300",
   lv: "bg-amber-100 border-amber-300",
@@ -374,44 +267,70 @@ const SUBJECT_COLORS = {
   autre: "bg-gray-100 border-gray-300",
 }
 
+// Couleur de remplissage explicite (évite les classes dynamiques purgées par Tailwind)
+const SUBJECT_BAR_BG: Record<string, string> = {
+  fr: "bg-indigo-400",
+  maths: "bg-rose-400",
+  lv: "bg-amber-400",
+  eps: "bg-emerald-400",
+  arts: "bg-pink-400",
+  qlm_emc: "bg-sky-400",
+  sciences: "bg-teal-400",
+  hg_emc: "bg-cyan-400",
+  autre: "bg-gray-400",
+}
+
 export default function EDTWizard() {
   // ===== Etat principal =====
-  const [step, setStep] = useState(1)
-  const [klass, setKlass] = useState("CM1")
-  const [days, setDays] = useState(() => {
+  const [step, setStep] = useState<number>(1)
+  const [klass, setKlass] = useState<ClassLevel>("CM1")
+  const [days, setDays] = useState<DayConfig[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("edt_days_v2")
-      if (saved) return JSON.parse(saved)
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved)
+          const res = z.array(zDayConfig).safeParse(parsed)
+          if (res.success) return res.data
+        } catch {}
+      }
     }
     return DEFAULT_DAYS
   })
-  const [blocks, setBlocks] = useState(() => {
+  const [blocks, setBlocks] = useState<Block[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("edt_blocks_v2")
-      if (saved) return JSON.parse(saved)
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved)
+          const res = z.array(zBlock).safeParse(parsed)
+          if (res.success) return res.data
+        } catch {}
+      }
     }
-    return []
+    return [] as Block[]
   })
-  const [customSubjects, setCustomSubjects] = useState<any[] | null>(() => {
+  const [customSubjects, setCustomSubjects] = useState<SubjectDef[] | null>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("edt_custom_subjects_v2")
       if (saved) {
         try {
           const parsed = JSON.parse(saved)
-          if (Array.isArray(parsed)) return parsed
+          const res = z.array(zSubjectDef).safeParse(parsed)
+          if (res.success) return res.data
         } catch {}
       }
     }
     return null
   })
   const [showCustomize, setShowCustomize] = useState(false)
-  const [editSubjects, setEditSubjects] = useState<any[]>([])
-  const [editingBlock, setEditingBlock] = useState(null)
-  const [exportTemplate, setExportTemplate] = useState("classic")
+  const [editSubjects, setEditSubjects] = useState<SubjectDef[]>([])
+  const [editingBlock, setEditingBlock] = useState<Block | null>(null)
+  const [exportTemplate, setExportTemplate] = useState<TemplateKey>("classic")
   const [exportTitle, setExportTitle] = useState("")
   const [exporting, setExporting] = useState(false)
-  const exportRef = useRef(null)
-  const summaryRef = useRef(null)
+  const exportRef = useRef<HTMLDivElement | null>(null)
+  const summaryRef = useRef<HTMLDivElement | null>(null)
   const [savedTimetables, setSavedTimetables] = useState<TimetableSave[]>([])
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [saveName, setSaveName] = useState("")
@@ -433,10 +352,13 @@ export default function EDTWizard() {
   }, [])
 
   const cycle = CLASS_TO_CYCLE[klass]
-  // Cast cycle to index SUBJECTS safely for TypeScript
-  const subjects: any[] = customSubjects || (SUBJECTS as any)[cycle]
-  const dayMap = useMemo(() => Object.fromEntries(days.map((d) => [d.key, d])), [days])
-  const enabledDays = days.filter((d) => d.enabled)
+  // Subjects for the selected cycle, or custom overrides
+  const subjects: SubjectDef[] = customSubjects ?? SUBJECTS[cycle]
+  const dayMap = useMemo<Record<DayKey, DayConfig>>(
+    () => Object.fromEntries(days.map((d) => [d.key, d])) as Record<DayKey, DayConfig>,
+    [days]
+  )
+  const enabledDays: DayConfig[] = days.filter((d) => d.enabled)
 
   useEffect(() => {
     if (typeof window !== "undefined") localStorage.setItem("edt_days_v2", JSON.stringify(days))
@@ -452,27 +374,27 @@ export default function EDTWizard() {
   }, [customSubjects])
 
   // ===== Calculs volumes =====
-  const requiredByKey = useMemo(() => {
-    const map = {}
+  const requiredByKey = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {}
     subjects.forEach((s) => (map[s.key] = s.minutes))
     return map
   }, [subjects])
-  const scheduledByKey = useMemo(() => {
-    const sums = {}
+  const scheduledByKey = useMemo<Record<string, number>>(() => {
+    const sums: Record<string, number> = {}
     blocks.forEach((b) => {
       const dur = Math.max(0, toMin(b.end) - toMin(b.start))
       sums[b.subject] = (sums[b.subject] || 0) + dur
     })
     return sums
   }, [blocks])
-  const remainingByKey = useMemo(() => {
-    const rem = {}
+  const remainingByKey = useMemo<Record<string, number>>(() => {
+    const rem: Record<string, number> = {}
     subjects.forEach((s) => (rem[s.key] = (requiredByKey[s.key] || 0) - (scheduledByKey[s.key] || 0)))
     return rem
   }, [subjects, requiredByKey, scheduledByKey])
 
   // ===== Normalisation / Validation AI =====
-  const DAY_NAME_TO_KEY: Record<string, string> = {
+  const DAY_NAME_TO_KEY: Record<string, DayKey> = {
     lundi: "Mon",
     monday: "Mon",
     mon: "Mon",
@@ -494,9 +416,9 @@ export default function EDTWizard() {
     return (s || "").normalize("NFD").replace(/\p{Diacritic}+/gu, "").toLowerCase().trim()
   }
 
-  function normalizeDayName(input: string): string | null {
+  function normalizeDayName(input: string): DayKey | null {
     const v = stripAccentsLower(input)
-    const key = DAY_NAME_TO_KEY[v] || (enabledDays.some((d) => stripAccentsLower(d.key) === v) ? input : null)
+    const key = DAY_NAME_TO_KEY[v] || (enabledDays.some((d) => stripAccentsLower(d.key) === v) ? (input as DayKey) : null)
     return key
   }
 
@@ -528,16 +450,19 @@ export default function EDTWizard() {
     return t
   }
 
-  function postProcessAIBlocks(aiBlocks: Array<any>, baseBlocks: Array<any> = []) {
-    const accepted: any[] = []
-    const dropped: Array<{ block: any; reason: string }> = []
+  function postProcessAIBlocks(
+    aiBlocks: Array<{ day: string; subject: string; start: string; end: string; subtitle?: string }>,
+    baseBlocks: Array<Block> = []
+  ) {
+    const accepted: Block[] = []
+    const dropped: Array<{ block: NewBlock; reason: string }> = []
 
     for (const b of aiBlocks || []) {
       const dayKey = normalizeDayName(b.day) || DAY_NAME_TO_KEY[stripAccentsLower(b.day)] || b.day
       const subjectKey = normalizeSubjectKey(b.subject)
       const start = normalizeHHMM(b.start)
       const end = normalizeHHMM(b.end)
-      const nb = { day: dayKey, subject: subjectKey, start, end, subtitle: b.subtitle || "" }
+      const nb: NewBlock = { day: dayKey as DayKey, subject: subjectKey, start, end, subtitle: b.subtitle || "" }
 
       // Validate against current timetable rules
       const err = blockConflict(nb)
@@ -613,13 +538,21 @@ export default function EDTWizard() {
 
   async function loadSave(save: TimetableSave) {
     try {
-      // Restaurer les données
-      setKlass(save.class_name)
-      setDays(save.days_config)
-      setBlocks(save.blocks)
-      setCustomSubjects(save.subjects)
+      // Validate incoming data
+      const parsed = zTimetableSave.safeParse(save)
+      if (!parsed.success) {
+        console.error('[v0] Invalid save payload:', parsed.error.flatten())
+        alert('Format de sauvegarde invalide. Impossible de charger cet emploi du temps.')
+        return
+      }
+      const data = parsed.data
+      // Restore data
+      setKlass(data.class_name)
+      setDays(data.days_config)
+      setBlocks(data.blocks)
+      setCustomSubjects(data.subjects)
       
-      alert(`Emploi du temps "${save.name}" chargé avec succès !`)
+      alert(`Emploi du temps "${data.name}" chargé avec succès !`)
     } catch (error) {
       console.error('Erreur lors du chargement:', error)
       alert('Erreur lors du chargement')
@@ -643,7 +576,7 @@ export default function EDTWizard() {
   }
 
   // ===== Fonctions horaires =====
-  function getRecessIntervals(dayObj: any) {
+  function getRecessIntervals(dayObj: DayConfig) {
     const r1s = toMin(dayObj.rec1Start),
       r1e = r1s + (dayObj.rec1Dur || 0)
     const r2s = toMin(dayObj.rec2Start),
@@ -653,7 +586,7 @@ export default function EDTWizard() {
       [r2s, r2e],
     ]
   }
-  function getTeachingIntervals(dayObj: any) {
+  function getTeachingIntervals(dayObj: DayConfig) {
     const ms = toMin(dayObj.morningStart),
       ls = toMin(dayObj.lunchStart)
     const le = toMin(dayObj.lunchEnd),
@@ -663,29 +596,32 @@ export default function EDTWizard() {
     if (le < de) arr.push([le, de])
     return arr
   }
-  function touchesRecess(dayObj: any, s: number, e: number) {
+  function touchesRecess(dayObj: DayConfig, s: number, e: number) {
     return getRecessIntervals(dayObj).some(([rs, re]) => overlaps(s, e, rs, re))
   }
-  function isInsideTeaching(dayObj: any, s: number, e: number) {
+  function isInsideTeaching(dayObj: DayConfig, s: number, e: number) {
     return getTeachingIntervals(dayObj).some(([ts, te]) => ts <= s && e <= te)
   }
 
-  function blockConflict(newBlock: any, ignoreId: string | null = null) {
+  // Autoriser les blocs pendant la cantine et les récrés: on ne garde que les bornes de la journée
+  function isInsideDay(dayObj: DayConfig, s: number, e: number) {
+    const ms = toMin(dayObj.morningStart)
+    const de = toMin(dayObj.dayEnd)
+    return ms <= s && e <= de
+  }
+
+  function blockConflict(newBlock: NewBlock | Block, ignoreId: string | null = null) {
     const d = dayMap[newBlock.day]
     if (!d || !d.enabled) return "Jour désactivé."
     const s = toMin(newBlock.start),
       e = toMin(newBlock.end)
     if (e <= s) return "Fin avant début."
-    if (!isInsideTeaching(d, s, e)) return "Hors des heures de classe (cantine ou hors plage)."
-
-    if (strictlyOverlapsRecess(d, s, e)) return "Chevauche une récréation."
-
-    const sameDay = blocks.filter((b) => b.day === newBlock.day && b.id !== ignoreId)
-    if (sameDay.some((b) => overlaps(s, e, toMin(b.start), toMin(b.end)))) return "Chevauche un autre créneau."
+    // Autoriser chevauchements et cantine/récrés, ne garder que bornes de journée
+    if (!isInsideDay(d, s, e)) return "Hors des bornes de la journée."
     return null
   }
 
-  function strictlyOverlapsRecess(day: any, start: number, end: number) {
+  function strictlyOverlapsRecess(day: DayConfig, start: number, end: number) {
     // Utilise les mêmes champs que le reste du code (rec1Start/rec1Dur, rec2Start/rec2Dur)
     const r1Start = toMin(day.rec1Start)
     const r1End = r1Start + (day.rec1Dur || 0)
@@ -699,14 +635,14 @@ export default function EDTWizard() {
     )
   }
 
-  function addBlock(b) {
+  function addBlock(b: NewBlock): boolean {
     const err = blockConflict(b)
     if (err) {
       // Essayer de trouver un créneau proche valide
       const duration = toMin(b.end) - toMin(b.start)
       const validStart = findNearestValidStart(b.day, toMin(b.start), duration)
       if (validStart !== null) {
-        const adjustedBlock = {
+        const adjustedBlock: NewBlock = {
           ...b,
           start: toHHMM(validStart),
           end: toHHMM(validStart + duration)
@@ -735,22 +671,16 @@ export default function EDTWizard() {
     ])
     return true
   }
-  function updateBlock(id, patch) {
+  function updateBlock(id: string, patch: Partial<Omit<Block, "id">>) {
     setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)))
   }
-  const removeBlock = (id) => setBlocks((prev) => prev.filter((b) => b.id !== id))
+  const removeBlock = (id: string) => setBlocks((prev) => prev.filter((b) => b.id !== id))
 
   // Function to duplicate a block to an adjacent day
-  const duplicateBlockToAdjacentDay = (block, direction) => {
+  const duplicateBlockToAdjacentDay = (block: Block, direction: 'left' | 'right') => {
     const currentDayIndex = enabledDays.findIndex(d => d.key === block.day)
-    let targetDayIndex
-    
-    if (direction === 'left') {
-      targetDayIndex = currentDayIndex - 1
-    } else if (direction === 'right') {
-      targetDayIndex = currentDayIndex + 1
-    }
-    
+    if (currentDayIndex === -1) return
+    const targetDayIndex = currentDayIndex + (direction === 'left' ? -1 : 1)
     // Check if target day exists
     if (targetDayIndex < 0 || targetDayIndex >= enabledDays.length) {
       return
@@ -759,9 +689,9 @@ export default function EDTWizard() {
     const targetDay = enabledDays[targetDayIndex].key
     
     // Create new block with same properties but different day and new ID
-    const newBlock = {
+    const newBlock: Block = {
       ...block,
-      id: Date.now() + Math.random(), // Generate unique ID
+      id: globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
       day: targetDay
     }
     
@@ -775,30 +705,29 @@ export default function EDTWizard() {
   }
 
   // ===== Trouver un créneau valide proche (utile au drop) =====
-  function findNearestValidStart(dayKey: string, baseStartMin: number, duration = 60) {
+  function findNearestValidStart(dayKey: DayKey, baseStartMin: number, duration = 60) {
     const d = dayMap[dayKey]
     if (!d) return null
-    const intervals = getTeachingIntervals(d)
-    const tried = new Set()
+    const dayStart = toMin(d.morningStart)
+    const dayEnd = toMin(d.dayEnd)
+    const tried = new Set<number>()
     for (let delta = 0; delta <= 240; delta += SNAP_MIN) {
       const candidates = delta === 0 ? [baseStartMin] : [baseStartMin + delta, baseStartMin - delta]
       for (const s of candidates) {
         if (tried.has(s)) continue
         tried.add(s)
         const e = s + duration
-        const inside = intervals.some(([ts, te]) => ts <= s && e <= te)
-        if (!inside) continue
-        const tmp = { day: dayKey, start: toHHMM(s), end: toHHMM(e), subject: subjects[0].key }
-        if (!touchesRecess(d, s, e)) {
-          const err = blockConflict(tmp)
-          if (!err) return s
-        }
+        // Valide si dans les bornes de la journée uniquement
+        if (s < dayStart || e > dayEnd) continue
+        const tmp: NewBlock = { day: dayKey, start: toHHMM(s), end: toHHMM(e), subject: subjects[0].key }
+        const err = blockConflict(tmp)
+        if (!err) return s
       }
     }
     return null
   }
 
-  function BlockRnd({ block, zoneStart, zoneEnd }) {
+  function BlockRnd({ block, zoneStart, zoneEnd }: { block: Block; zoneStart: number; zoneEnd: number }) {
     const { id, subject } = block
     const color = SUBJECT_COLORS[subject] || SUBJECT_COLORS.autre
     const s = toMin(block.start),
@@ -875,6 +804,18 @@ export default function EDTWizard() {
             {block.subtitle && <div className="text-xs text-gray-500 truncate mt-2">{block.subtitle}</div>}
           </div>
           <div className="flex flex-col gap-1 no-drag">
+            {/* Drag handle for horizontal move between days */}
+            <button
+              draggable
+              onDragStart={(ev) => {
+                ev.dataTransfer.setData("application/edt-block", String(id))
+                try { ev.dataTransfer.effectAllowed = "move" } catch {}
+              }}
+              className="w-6 h-6 bg-gray-700 hover:bg-gray-800 text-white rounded text-xs flex items-center justify-center transition-colors cursor-grab"
+              title="Déplacer horizontalement (vers un autre jour)"
+            >
+              ↔
+            </button>
             {/* Arrow buttons for duplicating to adjacent columns */}
             <div className="flex gap-1">
               {/* Left arrow - only show if there's a column to the left */}
@@ -1124,10 +1065,10 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
     try {
       const pdf = new jsPDF("landscape", "mm", "a4")
 
-      // Export main timetable
+      // Export main timetable (mode couleur avec secours automatique)
       if (exportRef.current) {
-        console.log("[v0] Rasterizing main timetable...")
-        const canvas = await rasterizeNode(exportRef.current)
+        console.log("[v0] Rasterizing main timetable (color mode with fallback)...")
+        const canvas = await rasterizeWithFallback(exportRef.current)
         const imgData = canvas.toDataURL("image/png")
         
         // Calculer les dimensions pour s'adapter à la page A4 paysage
@@ -1156,11 +1097,11 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
         console.warn("[v0] exportRef.current is null")
       }
 
-      // Export summary on new page
+      // Export summary on new page (mode couleur avec secours automatique)
       if (summaryRef.current) {
-        console.log("[v0] Rasterizing summary...")
+        console.log("[v0] Rasterizing summary (color mode with fallback)...")
         pdf.addPage()
-        const canvas = await rasterizeNode(summaryRef.current)
+        const canvas = await rasterizeWithFallback(summaryRef.current)
         const imgData = canvas.toDataURL("image/png")
         
         // Calculer les dimensions pour le résumé
@@ -1214,7 +1155,10 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
             <div className="flex justify-center">
               <select
                 value={klass}
-                onChange={(e) => setKlass(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value
+                  if (isKlass(v)) setKlass(v)
+                }}
                 className="p-3 rounded-lg border-2 border-gray-300 focus:border-cyan-500 text-lg min-w-[200px]"
               >
                 <option value="CP">CP (Cycle 2)</option>
@@ -1772,9 +1716,11 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                         <div className="text-xs text-gray-600 mt-1">
                           {minutesToHM(scheduled)} / {minutesToHM(required)}
                         </div>
-                        {remaining > 0 && (
+                        {remaining > 0 ? (
                           <div className="text-xs text-red-600 font-medium">Reste: {minutesToHM(remaining)}</div>
-                        )}
+                        ) : remaining < 0 ? (
+                          <div className="text-xs text-blue-600 font-medium">Dépasse: {minutesToHM(-remaining)}</div>
+                        ) : null}
                       </div>
                     )
                   })}
@@ -1800,7 +1746,7 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                           </div>
                           <div className="w-full bg-gray-200 rounded-full h-2">
                             <div
-                              className={`h-2 rounded-full transition-all duration-300 ${color.replace("bg-", "bg-").replace("-100", "-400")}`}
+                              className={`h-2 rounded-full transition-all duration-300 ${SUBJECT_BAR_BG[subject.key] || 'bg-gray-400'}`}
                               style={{ width: `${percentage}%` }}
                             />
                           </div>
@@ -1833,9 +1779,65 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                         <div
                           className="relative bg-gray-50 rounded-lg border-2 border-gray-200 overflow-hidden"
                           style={{ height: `${totalHeight}px`, minHeight: "400px" }}
-                          onDragOver={(e) => e.preventDefault()}
+                          onDragEnter={(e) => {
+                            e.currentTarget.classList.add('ring-2', 'ring-cyan-400')
+                          }}
+                          onDragLeave={(e) => {
+                            e.currentTarget.classList.remove('ring-2', 'ring-cyan-400')
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault()
+                            try { e.dataTransfer.dropEffect = 'move' } catch {}
+                          }}
                           onDrop={(e) => {
                             e.preventDefault()
+                            e.currentTarget.classList.remove('ring-2', 'ring-cyan-400')
+
+                            // 1) Déplacement d'un bloc existant entre colonnes
+                            const movedBlockId = e.dataTransfer.getData("application/edt-block")
+                            if (movedBlockId) {
+                              const blockToMove = blocks.find((b) => String(b.id) === movedBlockId)
+                              if (!blockToMove) return
+                              if (blockToMove.day === day.key) return
+
+                              // Déterminer le nouvel horaire depuis la position de drop (Y), en conservant la durée
+                              const rect = e.currentTarget.getBoundingClientRect()
+                              const y = e.clientY - rect.top
+                              const snappedStart = dayStart + Math.round(y / PX_PER_MIN / SNAP_MIN) * SNAP_MIN
+                              const duration = toMin(blockToMove.end) - toMin(blockToMove.start)
+                              const snappedEnd = snappedStart + duration
+
+                              const candidate = {
+                                ...blockToMove,
+                                day: day.key,
+                                start: toHHMM(snappedStart),
+                                end: toHHMM(snappedEnd),
+                              }
+                              const err = blockConflict(candidate, blockToMove.id)
+                              if (!err) {
+                                // Déplacement avec position verticale définie par le drop
+                                updateBlock(blockToMove.id, {
+                                  day: day.key,
+                                  start: candidate.start,
+                                  end: candidate.end,
+                                })
+                              } else {
+                                // Essayer de trouver un créneau proche valide autour de la position de drop
+                                const validStart = findNearestValidStart(day.key, snappedStart, duration)
+                                if (validStart !== null) {
+                                  updateBlock(blockToMove.id, {
+                                    day: day.key,
+                                    start: toHHMM(validStart),
+                                    end: toHHMM(validStart + duration),
+                                  })
+                                } else {
+                                  alert(`Impossible de déplacer le bloc: ${err}`)
+                                }
+                              }
+                              return
+                            }
+
+                            // 2) Drop d'une matière depuis la palette (comportement existant)
                             const subjectKey = e.dataTransfer.getData("text/plain")
                             if (!subjectKey) return
 
