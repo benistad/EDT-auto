@@ -373,6 +373,27 @@ export default function EDTWizard() {
     }
   }, [customSubjects])
 
+  // Copier les horaires du lundi vers les autres jours (ne modifie pas l'état activé/désactivé)
+  function copyMondayToOthers() {
+    const monday = days.find((d) => d.key === "Mon")
+    if (!monday) {
+      alert("Jour 'Lundi' introuvable")
+      return
+    }
+    const fields = {
+      morningStart: monday.morningStart,
+      lunchStart: monday.lunchStart,
+      lunchEnd: monday.lunchEnd,
+      dayEnd: monday.dayEnd,
+      rec1Start: monday.rec1Start,
+      rec1Dur: monday.rec1Dur,
+      rec2Start: monday.rec2Start,
+      rec2Dur: monday.rec2Dur,
+    }
+    const newDays = days.map((d) => (d.key === "Mon" ? d : { ...d, ...fields }))
+    setDays(newDays)
+  }
+
   // ===== Calculs volumes =====
   const requiredByKey = useMemo<Record<string, number>>(() => {
     const map: Record<string, number> = {}
@@ -1336,6 +1357,14 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
 
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <h2 className="text-2xl font-semibold mb-6 text-center">Configuration des jours d'école</h2>
+            <div className="flex justify-end -mt-2 mb-4">
+              <button
+                onClick={copyMondayToOthers}
+                className="px-3 py-2 rounded-md bg-cyan-500 hover:bg-cyan-600 text-white text-sm font-medium shadow"
+              >
+                Mêmes horaires que le lundi
+              </button>
+            </div>
             <div className="space-y-6">
               {days.map((day: any, i: number) => (
                 <div key={i} className="border rounded-lg p-4">
