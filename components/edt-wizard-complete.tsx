@@ -398,15 +398,15 @@ export default function EDTWizard() {
             return (
               <div
                 key={b.id}
-                className={`absolute left-0 right-0 px-2 py-0.5 ${color} rounded-md border shadow-sm overflow-hidden z-[1]`}
+                className={`absolute left-0 right-0 px-2 py-0.5 ${color} rounded-md border shadow-sm overflow-hidden z-[1] min-w-0`}
                 style={{ top, height: h }}
                 title={`${label} — ${b.start}–${b.end}${b.subtitle ? ` — ${b.subtitle}` : ''}`}
               >
                 <div className="flex flex-col gap-[1px]">
-                  <div className="flex items-center justify-between text-[11px] leading-tight">
-                    <div className="font-medium truncate whitespace-nowrap">{label}</div>
+                  <div className="flex items-center justify-between text-[11px] leading-tight min-w-0">
+                    <div className="font-medium truncate whitespace-nowrap min-w-0 flex-1">{label}</div>
                     {showTimes && (
-                      <div className="tabular-nums whitespace-nowrap">{b.start}–{b.end}</div>
+                      <div className="tabular-nums whitespace-nowrap shrink-0">{b.start}–{b.end}</div>
                     )}
                   </div>
                   {showSubtitle && (
