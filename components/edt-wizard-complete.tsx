@@ -93,6 +93,7 @@ const SNAP_MIN = 5; // pas d'accroche
 // Print/export-only scaling with lunch compression (keeps planner UI unchanged)
 const PRINT_PX_PER_MIN = 4; // 4px = 1 minute for better readability in PDF
 const PRINT_LUNCH_VISUAL_SCALE = 0.125; // 12.5% visual height for lunch gap (half of previous)
+const INTER_BLOCK_GAP = 2; // pixel gap between successive blocks to avoid visual collisions
 
 // Piecewise mapping: compress [lunchStart, lunchEnd] by PRINT_LUNCH_VISUAL_SCALE
 function timeToYPrint(min: number, dayStart: number, lunchStart: number, lunchEnd: number): number {
@@ -369,13 +370,13 @@ export default function EDTWizard() {
             if (e <= s) return null;
             const top = timeToYPrint(s, dayStart, lunchStart, lunchEnd);
             const h = Math.max(1, timeToYPrint(e, dayStart, lunchStart, lunchEnd) - top);
-            return <div key={i} className="absolute inset-x-0 bg-yellow-100/70" style={{ top, height: h }} title="Récréation"/>;
+            return <div key={i} className="absolute inset-x-0 bg-yellow-100/70 pointer-events-none z-0" style={{ top, height: h }} title="Récréation"/>;
           })}
 
           {/* Lunch overlay (compressed visually) */}
           {lunchEnd > lunchStart && (
             <div
-              className="absolute inset-x-0 bg-gray-100/70 border-y"
+              className="absolute inset-x-0 bg-gray-100/70 border-y pointer-events-none z-0"
               style={{
                 top: timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd),
                 height: Math.max(1, timeToYPrint(lunchEnd, dayStart, lunchStart, lunchEnd) - timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd)),
@@ -388,15 +389,30 @@ export default function EDTWizard() {
           {dayBlocks.map(b => {
             const bs = toMin(b.start), be = toMin(b.end);
             const top = timeToYPrint(bs, dayStart, lunchStart, lunchEnd);
-            const h = Math.max(16, timeToYPrint(be, dayStart, lunchStart, lunchEnd) - timeToYPrint(bs, dayStart, lunchStart, lunchEnd));
+            const natural = timeToYPrint(be, dayStart, lunchStart, lunchEnd) - timeToYPrint(bs, dayStart, lunchStart, lunchEnd);
+            const h = Math.max(1, Math.floor(natural) - INTER_BLOCK_GAP); // never exceed natural height to prevent overlaps
             const color = SUBJECT_COLORS[b.subject] || SUBJECT_COLORS.autre;
+            const label = subjects.find(s=>s.key===b.subject)?.label || b.subject;
+            const showTimes = h >= 20; // hide times on ultra-short blocks
+            const showSubtitle = !!b.subtitle && h >= 44; // show subtitle only if enough height
             return (
-              <div key={b.id} className={`absolute left-0 right-0 px-2 py-1 ${color} rounded-md border shadow-sm`} style={{ top, height: h }}>
-                <div className="flex items-center justify-between text-[11px]">
-                  <div className="font-medium truncate">{subjects.find(s=>s.key===b.subject)?.label || b.subject}</div>
-                  <div className="tabular-nums">{b.start}–{b.end}</div>
+              <div
+                key={b.id}
+                className={`absolute left-0 right-0 px-2 py-0.5 ${color} rounded-md border shadow-sm overflow-hidden z-[1]`}
+                style={{ top, height: h }}
+                title={`${label} — ${b.start}–${b.end}${b.subtitle ? ` — ${b.subtitle}` : ''}`}
+              >
+                <div className="flex flex-col gap-[1px]">
+                  <div className="flex items-center justify-between text-[11px] leading-tight">
+                    <div className="font-medium truncate whitespace-nowrap">{label}</div>
+                    {showTimes && (
+                      <div className="tabular-nums whitespace-nowrap">{b.start}–{b.end}</div>
+                    )}
+                  </div>
+                  {showSubtitle && (
+                    <div className="text-[10px] leading-tight italic text-gray-700 truncate whitespace-nowrap">{b.subtitle}</div>
+                  )}
                 </div>
-                {b.subtitle && <div className="text-[10px] italic text-gray-700 truncate">{b.subtitle}</div>}
               </div>
             );
           })}
@@ -761,12 +777,12 @@ export default function EDTWizard() {
     const t = TEMPLATES.find(x=>x.key===template) || TEMPLATES[0];
     const enabledDays = days.filter(d=>d.enabled);
     return (
-      <div className={`rounded-2xl border ${t.card} ${t.gridBg} p-3 w-full`} ref={exportRef}>
+      <div className={`rounded-2xl border ${t.card} ${t.gridBg} p-2 w-full`} ref={exportRef}>
         <div className={`px-4 py-3 rounded-xl ${t.header} mb-3`}>
           <div className="text-lg font-bold">Emploi du temps – {klass} (Cycle {cycle})</div>
           {exportTitle && <div className="text-sm opacity-90">{exportTitle}</div>}
         </div>
-        <div className="grid lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-4 gap-3">
           {enabledDays.map(d => (
             <div key={d.key} className="rounded-xl border bg-white overflow-hidden">
               <div className="px-3 py-2 bg-gray-100 border-b flex items-center justify-between">
