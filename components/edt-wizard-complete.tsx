@@ -87,8 +87,22 @@ const DEFAULT_DAYS: Day[] = [
   { key: "Fri", label: "Vendredi", enabled: true,  morningStart: "08:30", lunchStart: "12:00", lunchEnd: "13:30", dayEnd: "16:30", rec1Start: "10:15", rec1Dur: 15, rec2Start: "15:00", rec2Dur: 15 },
 ];
 
-const PX_PER_MIN = 1; // 1px = 1 minute pour une lecture claire
+const PX_PER_MIN = 1; // 1px = 1 minute pour une lecture claire (planner uniquement)
 const SNAP_MIN = 5; // pas d'accroche
+
+// Print/export-only scaling with lunch compression (keeps planner UI unchanged)
+const PRINT_PX_PER_MIN = 4; // 4px = 1 minute for better readability in PDF
+const PRINT_LUNCH_VISUAL_SCALE = 0.5; // 50% visual height for lunch gap
+
+// Piecewise mapping: compress [lunchStart, lunchEnd] by PRINT_LUNCH_VISUAL_SCALE
+function timeToYPrint(min: number, dayStart: number, lunchStart: number, lunchEnd: number): number {
+  const px = PRINT_PX_PER_MIN;
+  if (min <= lunchStart) return (min - dayStart) * px;
+  const pre = (lunchStart - dayStart) * px;
+  if (min <= lunchEnd) return pre + (min - lunchStart) * px * PRINT_LUNCH_VISUAL_SCALE;
+  const lunchCompressed = (lunchEnd - lunchStart) * px * PRINT_LUNCH_VISUAL_SCALE;
+  return pre + lunchCompressed + (min - lunchEnd) * px;
+}
 
 // ===== Templates d'export PDF (unique) =====
 const TEMPLATES = [
@@ -316,6 +330,76 @@ export default function EDTWizard() {
 
         <div className="flex items-center justify-end gap-2">
           <button className="px-4 py-2 rounded-xl bg-blue-600 text-white" onClick={()=>setStep(2)}>Aller à la création de l'emploi du temps →</button>
+        </div>
+      </div>
+    );
+  }
+
+  // New: Full-day printable column with lunch compression
+  function PrintDayColumn({ day, template }: { day: Day; template: typeof TEMPLATES[number] }): ReactElement {
+    const d = dayMap[day.key];
+    const dayStart = toMin(d.morningStart);
+    const lunchStart = toMin(d.lunchStart);
+    const lunchEnd = toMin(d.lunchEnd);
+    const dayEnd = toMin(d.dayEnd);
+
+    const totalHeight = Math.max(40,
+      timeToYPrint(dayEnd, dayStart, lunchStart, lunchEnd) - timeToYPrint(dayStart, dayStart, lunchStart, lunchEnd)
+    );
+
+    const dayBlocks = blocks
+      .filter(b => b.day === day.key && toMin(b.start) >= dayStart && toMin(b.end) <= dayEnd)
+      .sort((a,b) => toMin(a.start) - toMin(b.start));
+
+    const gridSize = SNAP_MIN * PRINT_PX_PER_MIN;
+
+    return (
+      <div className="rounded-lg border bg-white overflow-hidden">
+        <div className="px-2 py-1 text-xs bg-gray-50 border-b flex items-center justify-between">
+          <div className="font-medium">Journée</div>
+          <div className="text-gray-600">{d.morningStart} – {d.lunchStart} · cantine · {d.lunchEnd} – {d.dayEnd}</div>
+        </div>
+        <div
+          className="relative"
+          style={{ height: `${totalHeight}px`, backgroundSize: `100% ${gridSize}px`, backgroundImage: "linear-gradient(to bottom, rgba(0,0,0,0.06) 1px, transparent 1px)" }}
+        >
+          {/* Recess overlays (compressed consistently) */}
+          {getRecessIntervals(d).map(([rs,re],i)=>{
+            const s = Math.max(dayStart, rs), e = Math.min(dayEnd, re);
+            if (e <= s) return null;
+            const top = timeToYPrint(s, dayStart, lunchStart, lunchEnd);
+            const h = Math.max(1, timeToYPrint(e, dayStart, lunchStart, lunchEnd) - top);
+            return <div key={i} className="absolute inset-x-0 bg-yellow-100/70" style={{ top, height: h }} title="Récréation"/>;
+          })}
+
+          {/* Lunch overlay (compressed visually) */}
+          {lunchEnd > lunchStart && (
+            <div
+              className="absolute inset-x-0 bg-gray-100/70 border-y"
+              style={{
+                top: timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd),
+                height: Math.max(1, timeToYPrint(lunchEnd, dayStart, lunchStart, lunchEnd) - timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd)),
+              }}
+              title="Cantine"
+            />
+          )}
+
+          {/* Blocks positioned with compressed mapping */}
+          {dayBlocks.map(b => {
+            const bs = toMin(b.start), be = toMin(b.end);
+            const top = timeToYPrint(bs, dayStart, lunchStart, lunchEnd);
+            const h = Math.max(16, timeToYPrint(be, dayStart, lunchStart, lunchEnd) - timeToYPrint(bs, dayStart, lunchStart, lunchEnd));
+            const color = SUBJECT_COLORS[b.subject] || SUBJECT_COLORS.autre;
+            return (
+              <div key={b.id} className={`absolute left-0 right-0 px-2 py-1 ${color} rounded-md border shadow-sm`} style={{ top, height: h }}>
+                <div className="flex items-center justify-between text-[11px]">
+                  <div className="font-medium truncate">{subjects.find(s=>s.key===b.subject)?.label || b.subject}</div>
+                  <div className="tabular-nums">{b.start}–{b.end}</div>
+                </div>
+                {b.subtitle && <div className="text-[10px] italic text-gray-700 truncate">{b.subtitle}</div>}
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -689,9 +773,8 @@ export default function EDTWizard() {
                 <div className="font-semibold">{d.label}</div>
                 <div className="text-xs text-gray-600">{d.morningStart}–{d.lunchStart} · {d.lunchEnd}–{d.dayEnd}</div>
               </div>
-              <div className="p-2 grid gap-2">
-                <PrintDayPart day={d} part="AM" template={t} />
-                <PrintDayPart day={d} part="PM" template={t} />
+              <div className="p-2">
+                <PrintDayColumn day={d} template={t} />
               </div>
             </div>
           ))}
