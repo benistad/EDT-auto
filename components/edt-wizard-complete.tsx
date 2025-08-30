@@ -368,8 +368,8 @@ export default function EDTWizard() {
           {getRecessIntervals(d).map(([rs,re],i)=>{
             const s = Math.max(dayStart, rs), e = Math.min(dayEnd, re);
             if (e <= s) return null;
-            const top = timeToYPrint(s, dayStart, lunchStart, lunchEnd);
-            const h = Math.max(1, timeToYPrint(e, dayStart, lunchStart, lunchEnd) - top);
+            const top = Math.round(timeToYPrint(s, dayStart, lunchStart, lunchEnd));
+            const h = Math.max(1, Math.round(timeToYPrint(e, dayStart, lunchStart, lunchEnd) - timeToYPrint(s, dayStart, lunchStart, lunchEnd)));
             return <div key={i} className="absolute inset-x-0 bg-yellow-100/70 pointer-events-none z-0" style={{ top, height: h }} title="Récréation"/>;
           })}
 
@@ -378,8 +378,8 @@ export default function EDTWizard() {
             <div
               className="absolute inset-x-0 bg-gray-100/70 border-y pointer-events-none z-0"
               style={{
-                top: timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd),
-                height: Math.max(1, timeToYPrint(lunchEnd, dayStart, lunchStart, lunchEnd) - timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd)),
+                top: Math.round(timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd)),
+                height: Math.max(1, Math.round(timeToYPrint(lunchEnd, dayStart, lunchStart, lunchEnd) - timeToYPrint(lunchStart, dayStart, lunchStart, lunchEnd))),
               }}
               title="Cantine"
             />
@@ -388,13 +388,14 @@ export default function EDTWizard() {
           {/* Blocks positioned with compressed mapping */}
           {dayBlocks.map(b => {
             const bs = toMin(b.start), be = toMin(b.end);
-            const top = timeToYPrint(bs, dayStart, lunchStart, lunchEnd);
+            const top = Math.round(timeToYPrint(bs, dayStart, lunchStart, lunchEnd));
             const natural = timeToYPrint(be, dayStart, lunchStart, lunchEnd) - timeToYPrint(bs, dayStart, lunchStart, lunchEnd);
-            const h = Math.max(1, Math.floor(natural) - INTER_BLOCK_GAP); // never exceed natural height to prevent overlaps
+            const h = Math.max(1, Math.round(natural) - INTER_BLOCK_GAP); // never exceed natural height to prevent overlaps
             const color = SUBJECT_COLORS[b.subject] || SUBJECT_COLORS.autre;
             const label = subjects.find(s=>s.key===b.subject)?.label || b.subject;
-            const showTimes = h >= 20; // hide times on ultra-short blocks
-            const showSubtitle = !!b.subtitle && h >= 44; // show subtitle only if enough height
+            const showLabel = h >= 14; // hide subject label if too short
+            const showTimes = h >= 24; // hide times on very short blocks
+            const showSubtitle = !!b.subtitle && h >= 46; // show subtitle only if enough height
             return (
               <div
                 key={b.id}
@@ -404,7 +405,7 @@ export default function EDTWizard() {
               >
                 <div className="flex flex-col gap-[1px]">
                   <div className="flex items-center justify-between text-[11px] leading-tight min-w-0">
-                    <div className="font-medium truncate whitespace-nowrap min-w-0 flex-1">{label}</div>
+                    <div className="font-medium truncate whitespace-nowrap min-w-0 flex-1">{showLabel ? label : ""}</div>
                     {showTimes && (
                       <div className="tabular-nums whitespace-nowrap shrink-0">{b.start}–{b.end}</div>
                     )}
@@ -782,7 +783,7 @@ export default function EDTWizard() {
           <div className="text-lg font-bold">Emploi du temps – {klass} (Cycle {cycle})</div>
           {exportTitle && <div className="text-sm opacity-90">{exportTitle}</div>}
         </div>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-4 gap-2">
           {enabledDays.map(d => (
             <div key={d.key} className="rounded-xl border bg-white overflow-hidden">
               <div className="px-3 py-2 bg-gray-100 border-b flex items-center justify-between">
