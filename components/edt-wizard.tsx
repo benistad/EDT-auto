@@ -1753,7 +1753,7 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             {/* Subject Panel */}
             <div className="lg:col-span-1">
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-cyan-200 p-6">
+              <div className="sticky top-4 bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-cyan-200 p-6 max-h-[calc(100vh-2rem)] overflow-y-auto">
                 <h2 className="text-xl font-bold mb-4 text-gray-800">📚 Matières disponibles</h2>
                 <div className="space-y-3">
                   {subjects.map((subject) => {
