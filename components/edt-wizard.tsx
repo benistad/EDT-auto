@@ -210,6 +210,26 @@ const PX_PER_MIN = 4 // 4px = 1 minute pour colonnes plus longues et meilleure l
 const SNAP_MIN = 5 // pas d'accroche de 5 minutes
 const LUNCH_VISUAL_SCALE = 0.5 // Compression visuelle de la cantine (50% de la hauteur réelle)
 
+// Conversion temps(min) -> position Y (px) avec compression visuelle sur l'intervalle cantine
+function timeToY(min: number, dayStart: number, lunchStart: number, lunchEnd: number): number {
+  const px = PX_PER_MIN
+  if (min <= lunchStart) return (min - dayStart) * px
+  const pre = (lunchStart - dayStart) * px
+  if (min <= lunchEnd) return pre + (min - lunchStart) * px * LUNCH_VISUAL_SCALE
+  const lunchCompressed = (lunchEnd - lunchStart) * px * LUNCH_VISUAL_SCALE
+  return pre + lunchCompressed + (min - lunchEnd) * px
+}
+
+// Conversion position Y (px) -> temps(min) inverse de timeToY
+function yToTime(y: number, dayStart: number, lunchStart: number, lunchEnd: number): number {
+  const px = PX_PER_MIN
+  const pre = (lunchStart - dayStart) * px
+  const lunchCompressed = (lunchEnd - lunchStart) * px * LUNCH_VISUAL_SCALE
+  if (y <= pre) return dayStart + y / px
+  if (y <= pre + lunchCompressed) return lunchStart + (y - pre) / (px * LUNCH_VISUAL_SCALE)
+  return lunchEnd + (y - pre - lunchCompressed) / px
+}
+
 // ===== Templates d'export PDF (unique) =====
 const TEMPLATES = [
   {
@@ -749,13 +769,13 @@ export default function EDTWizard() {
     return null
   }
 
-  function BlockRnd({ block, zoneStart, zoneEnd }: { block: Block; zoneStart: number; zoneEnd: number }) {
+  function BlockRnd({ block, zoneStart, zoneEnd, lunchStartMin, lunchEndMin }: { block: Block; zoneStart: number; zoneEnd: number; lunchStartMin: number; lunchEndMin: number }) {
     const { id, subject } = block
     const color = SUBJECT_COLORS[subject] || SUBJECT_COLORS.autre
     const s = toMin(block.start),
       e = toMin(block.end)
-    const top = (s - zoneStart) * PX_PER_MIN
-    const height = Math.max(60, (e - s) * PX_PER_MIN)
+    const top = timeToY(s, zoneStart, lunchStartMin, lunchEndMin)
+    const height = Math.max(60, timeToY(e, zoneStart, lunchStartMin, lunchEndMin) - timeToY(s, zoneStart, lunchStartMin, lunchEndMin))
 
     return (
       <Rnd
@@ -774,9 +794,12 @@ export default function EDTWizard() {
         size={{ width: "100%", height }}
         position={{ x: 0, y: top }}
         onDragStop={(e, d) => {
-          const newStart = zoneStart + Math.round(d.y / PX_PER_MIN / SNAP_MIN) * SNAP_MIN
+          const rawStart = yToTime(d.y, zoneStart, lunchStartMin, lunchEndMin)
+          let newStart = Math.round(rawStart / SNAP_MIN) * SNAP_MIN
+          // clamp in bounds
+          newStart = Math.max(zoneStart, Math.min(newStart, zoneEnd - SNAP_MIN))
           const duration = toMin(block.end) - toMin(block.start)
-          const newEnd = newStart + duration
+          const newEnd = Math.min(zoneEnd, newStart + duration)
           const newBlock = { ...block, start: toHHMM(newStart), end: toHHMM(newEnd) }
           const err = blockConflict(newBlock, id)
           if (!err) {
@@ -793,9 +816,15 @@ export default function EDTWizard() {
         }}
         onResizeStop={(e, direction, ref, delta, position) => {
           const newHeight = Number.parseInt(ref.style.height)
-          const newStart = zoneStart + Math.round(position.y / PX_PER_MIN / SNAP_MIN) * SNAP_MIN
-          const newDuration = Math.max(SNAP_MIN, Math.round(newHeight / PX_PER_MIN / SNAP_MIN) * SNAP_MIN)
-          const newEnd = newStart + newDuration
+          const yTop = position.y
+          const yBottom = position.y + newHeight
+          let newStart = Math.round(yToTime(yTop, zoneStart, lunchStartMin, lunchEndMin) / SNAP_MIN) * SNAP_MIN
+          let newEnd = Math.round(yToTime(yBottom, zoneStart, lunchStartMin, lunchEndMin) / SNAP_MIN) * SNAP_MIN
+          if (newEnd <= newStart) newEnd = newStart + SNAP_MIN
+          // clamp in bounds
+          newStart = Math.max(zoneStart, newStart)
+          newEnd = Math.min(zoneEnd, newEnd)
+          const newDuration = Math.max(SNAP_MIN, newEnd - newStart)
           const newBlock = { ...block, start: toHHMM(newStart), end: toHHMM(newEnd) }
           const err = blockConflict(newBlock, id)
           if (!err) {
@@ -810,8 +839,8 @@ export default function EDTWizard() {
             }
           }
         }}
-        dragGrid={[1, PX_PER_MIN * SNAP_MIN]}
-        resizeGrid={[1, PX_PER_MIN * SNAP_MIN]}
+        dragGrid={[1, 1]}
+        resizeGrid={[1, 1]}
         className={`${color} border-2 rounded-lg shadow-sm cursor-move overflow-hidden relative`}
       >
         <div className="p-2 h-full flex">
@@ -1796,7 +1825,9 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                     const d = dayMap[day.key]
                     const dayStart = toMin(d.morningStart)
                     const dayEnd = toMin(d.dayEnd)
-                    const totalHeight = (dayEnd - dayStart) * PX_PER_MIN
+                    const lunchStartMin = toMin(d.lunchStart)
+                    const lunchEndMin = toMin(d.lunchEnd)
+                    const totalHeight = timeToY(dayEnd, dayStart, lunchStartMin, lunchEndMin)
                     const dayBlocks = blocks.filter((b) => b.day === day.key)
 
                     return (
@@ -1833,7 +1864,8 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                               // Déterminer le nouvel horaire depuis la position de drop (Y), en conservant la durée
                               const rect = e.currentTarget.getBoundingClientRect()
                               const y = e.clientY - rect.top
-                              const snappedStart = dayStart + Math.round(y / PX_PER_MIN / SNAP_MIN) * SNAP_MIN
+                              const rawStart = yToTime(y, dayStart, lunchStartMin, lunchEndMin)
+                              const snappedStart = Math.round(rawStart / SNAP_MIN) * SNAP_MIN
                               const duration = toMin(blockToMove.end) - toMin(blockToMove.start)
                               const snappedEnd = snappedStart + duration
 
@@ -1873,7 +1905,7 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
 
                             const rect = e.currentTarget.getBoundingClientRect()
                             const y = e.clientY - rect.top
-                            const startMin = dayStart + Math.round(y / PX_PER_MIN / SNAP_MIN) * SNAP_MIN
+                            const startMin = Math.round(yToTime(y, dayStart, lunchStartMin, lunchEndMin) / SNAP_MIN) * SNAP_MIN
                             const duration = 60 // Default 1 hour
                             const endMin = startMin + duration
 
@@ -1894,7 +1926,7 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                           {/* Hour lines */}
                           {Array.from({ length: Math.ceil((dayEnd - dayStart) / 60) + 1 }, (_, i) => {
                             const time = dayStart + i * 60
-                            const y = (time - dayStart) * PX_PER_MIN
+                            const y = timeToY(time, dayStart, lunchStartMin, lunchEndMin)
                             return (
                               <div
                                 key={i}
@@ -1908,8 +1940,8 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
 
                           {/* Recess blocks */}
                           {getRecessIntervals(d).map(([start, end], i) => {
-                            const top = (start - dayStart) * PX_PER_MIN
-                            const height = (end - start) * PX_PER_MIN
+                            const top = timeToY(start, dayStart, lunchStartMin, lunchEndMin)
+                            const height = timeToY(end, dayStart, lunchStartMin, lunchEndMin) - timeToY(start, dayStart, lunchStartMin, lunchEndMin)
                             return (
                               <div
                                 key={i}
@@ -1923,10 +1955,10 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
 
                           {/* Lunch block */}
                           {(() => {
-                            const lunchStart = toMin(d.lunchStart)
-                            const lunchEnd = toMin(d.lunchEnd)
-                            const top = (lunchStart - dayStart) * PX_PER_MIN
-                            const height = (lunchEnd - lunchStart) * PX_PER_MIN * LUNCH_VISUAL_SCALE
+                            const lunchStart = lunchStartMin
+                            const lunchEnd = lunchEndMin
+                            const top = timeToY(lunchStart, dayStart, lunchStartMin, lunchEndMin)
+                            const height = timeToY(lunchEnd, dayStart, lunchStartMin, lunchEndMin) - timeToY(lunchStart, dayStart, lunchStartMin, lunchEndMin)
                             return (
                               <div
                                 className="absolute left-0 right-0 bg-orange-200 border border-orange-400 flex items-center justify-center text-xs font-medium text-orange-800"
@@ -1939,7 +1971,14 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
 
                           {/* Subject blocks */}
                           {dayBlocks.map((block) => (
-                            <BlockRnd key={block.id} block={block} zoneStart={dayStart} zoneEnd={dayEnd} />
+                            <BlockRnd
+                              key={block.id}
+                              block={block}
+                              zoneStart={dayStart}
+                              zoneEnd={dayEnd}
+                              lunchStartMin={lunchStartMin}
+                              lunchEndMin={lunchEndMin}
+                            />
                           ))}
 
                           {/* Bottom border */}
