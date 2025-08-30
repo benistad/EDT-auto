@@ -206,8 +206,9 @@ const DEFAULT_DAYS: DayConfig[] = [
   },
 ]
 
-const PX_PER_MIN = 3 // 3px = 1 minute pour une meilleure lisibilité des créneaux courts (ex: 15 min)
+const PX_PER_MIN = 4 // 4px = 1 minute pour colonnes plus longues et meilleure lisibilité
 const SNAP_MIN = 5 // pas d'accroche de 5 minutes
+const LUNCH_VISUAL_SCALE = 0.5 // Compression visuelle de la cantine (50% de la hauteur réelle)
 
 // ===== Templates d'export PDF (unique) =====
 const TEMPLATES = [
@@ -1925,7 +1926,7 @@ Génère UNIQUEMENT les nouveaux créneaux à ajouter.`
                             const lunchStart = toMin(d.lunchStart)
                             const lunchEnd = toMin(d.lunchEnd)
                             const top = (lunchStart - dayStart) * PX_PER_MIN
-                            const height = (lunchEnd - lunchStart) * PX_PER_MIN
+                            const height = (lunchEnd - lunchStart) * PX_PER_MIN * LUNCH_VISUAL_SCALE
                             return (
                               <div
                                 className="absolute left-0 right-0 bg-orange-200 border border-orange-400 flex items-center justify-center text-xs font-medium text-orange-800"
