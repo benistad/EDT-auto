@@ -92,7 +92,7 @@ const SNAP_MIN = 5; // pas d'accroche
 
 // Print/export-only scaling with lunch compression (keeps planner UI unchanged)
 const PRINT_PX_PER_MIN = 4; // 4px = 1 minute for better readability in PDF
-const PRINT_LUNCH_VISUAL_SCALE = 0.5; // 50% visual height for lunch gap
+const PRINT_LUNCH_VISUAL_SCALE = 0.25; // 25% visual height for lunch gap
 
 // Piecewise mapping: compress [lunchStart, lunchEnd] by PRINT_LUNCH_VISUAL_SCALE
 function timeToYPrint(min: number, dayStart: number, lunchStart: number, lunchEnd: number): number {
