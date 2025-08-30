@@ -206,7 +206,7 @@ const DEFAULT_DAYS: DayConfig[] = [
   },
 ]
 
-const PX_PER_MIN = 2 // 2px = 1 minute pour plus de précision visuelle
+const PX_PER_MIN = 3 // 3px = 1 minute pour une meilleure lisibilité des créneaux courts (ex: 15 min)
 const SNAP_MIN = 5 // pas d'accroche de 5 minutes
 
 // ===== Templates d'export PDF (unique) =====
